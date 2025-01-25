@@ -4,12 +4,10 @@ import 'package:flutter/material.dart';
 
 class PlayingPage extends StatefulWidget {
   final int numberOfPlayers;
-  final int representationMode; // 0 -> Numbers, 1 -> Dots
 
   const PlayingPage({
     super.key,
     required this.numberOfPlayers,
-    required this.representationMode,
   });
 
   @override
@@ -17,12 +15,37 @@ class PlayingPage extends StatefulWidget {
 }
 
 class _PlayingPageState extends State<PlayingPage> {
-  // Use const for rows & cols if they never change
   static const int rows = 14;
   static const int cols = 7;
 
   static const animationDuration = Duration(milliseconds: 300);
-  static const explosionDelay = Duration(milliseconds: 100);
+  static const explosionDelay = Duration(milliseconds: 150);
+  static const distributionDelay = Duration(milliseconds: 100);
+
+  // Remove maxIterations constant
+
+  // Add isUnstable helper method
+  bool isUnstable(int r, int c) {
+    return orbs[r][c] >= _neighbors(r, c).length;
+  }
+
+  // Add validation method
+  Future<void> validateAndCompleteReactions(
+      Set<(int, int)> processedCells) async {
+    bool hasUnstable = true;
+    while (hasUnstable) {
+      hasUnstable = false;
+      for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+          if (!processedCells.contains((r, c)) && isUnstable(r, c)) {
+            hasUnstable = true;
+            await _triggerChainReaction(r, c);
+            processedCells.add((r, c));
+          }
+        }
+      }
+    }
+  }
 
   late List<List<int>> orbs;
   late List<List<int>> owners;
@@ -65,6 +88,14 @@ class _PlayingPageState extends State<PlayingPage> {
   // Add pending updates tracking
   final Map<String, Queue<(int, int)>> pendingUpdates = {};
 
+  // Add corner positions constant
+  static const corners = {
+    (0, 0),
+    (0, cols - 1),
+    (rows - 1, 0),
+    (rows - 1, cols - 1)
+  };
+
   @override
   void initState() {
     super.initState();
@@ -103,7 +134,45 @@ class _PlayingPageState extends State<PlayingPage> {
     return original.map((row) => List<int>.from(row)).toList();
   }
 
+  // Add these helper methods at class level
+  bool hasUnstableCells() {
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        if (isUnstable(r, c)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  Future<void> completeAllReactions() async {
+    while (hasUnstableCells()) {
+      for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+          if (isUnstable(r, c)) {
+            await _triggerChainReaction(r, c);
+          }
+        }
+      }
+    }
+  }
+
+  // Update validation in _handleTap
   void _handleTap(int r, int c) async {
+    if (!mounted) return;
+
+    // Add corner capacity check
+    final isCorner = corners.contains((r, c));
+    final neighborCount = _neighbors(r, c).length;
+
+    if (orbs[r][c] > (isCorner ? 1 : neighborCount)) {
+      // Fix illegal state
+      setState(() {
+        orbs[r][c] = isCorner ? 1 : neighborCount;
+      });
+    }
+
     if (!isActive[currentPlayer]) return;
     if (orbs[r][c] == 0 || owners[r][c] == currentPlayer) {
       // Push current state to history before making changes
@@ -116,6 +185,7 @@ class _PlayingPageState extends State<PlayingPage> {
       });
       // Trigger chain reaction asynchronously
       await _triggerChainReaction(r, c);
+      await completeAllReactions(); // Add this line
 
       // Only check elimination if every player has had at least one turn
       final allPlayersHadOneTurn = turnCount.every((count) => count >= 1);
@@ -123,7 +193,10 @@ class _PlayingPageState extends State<PlayingPage> {
         _checkForElimination();
       }
 
-      _nextPlayer();
+      if (!hasUnstableCells()) {
+        // Only change turn if no unstable cells
+        _nextPlayer();
+      }
     }
   }
 
@@ -139,8 +212,9 @@ class _PlayingPageState extends State<PlayingPage> {
       final nextLevel = Queue<(int, int)>();
       final explosionsThisLevel = <(int, int)>{};
       final affectedCells = <(int, int)>{};
+      final updates = <(int, int, int, int)>[];
 
-      // Collect explosions for this level
+      // Collect ALL unstable cells for this level
       for (final cell in currentLevel) {
         final (cr, cc) = cell;
         if (!processedCells.contains((cr, cc)) &&
@@ -155,30 +229,26 @@ class _PlayingPageState extends State<PlayingPage> {
       }
 
       if (explosionsThisLevel.isNotEmpty) {
-        // Scale up explosions
+        // Process explosions
         setState(() {
           for (final (cr, cc) in explosionsThisLevel) {
-            cellScales[cr][cc] = 1.4;
+            cellScales[cr][cc] = 1.25;
           }
         });
         await Future.delayed(explosionDelay);
 
-        // Process explosions and collect updates
-        final updates = <(int, int, int, int)>[];
-
+        // Collect ALL updates
         for (final (cr, cc) in explosionsThisLevel) {
           final neighbors = _neighbors(cr, cc);
           final cap = neighbors.length;
           final cellOwner = owners[cr][cc];
 
-          // Update exploding cell
           setState(() {
-            cellScales[cr][cc] = 0.8;
+            cellScales[cr][cc] = 0.95;
             orbs[cr][cc] -= cap;
             if (orbs[cr][cc] == 0) owners[cr][cc] = -1;
           });
 
-          // Collect neighbor updates
           for (final (nr, nc) in neighbors) {
             if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
               updates.add((nr, nc, 1, cellOwner));
@@ -187,24 +257,27 @@ class _PlayingPageState extends State<PlayingPage> {
           }
         }
 
-        // Apply updates and check for new reactions
+        // Apply ALL updates simultaneously
         setState(() {
           for (final (r, c, count, owner) in updates) {
             orbs[r][c] += count;
             owners[r][c] = owner;
-            cellScales[r][c] = 1.2;
-
-            // Check if this cell needs to react in next level
-            if (orbs[r][c] >= _neighbors(r, c).length &&
-                !processedCells.contains((r, c))) {
-              nextLevel.add((r, c));
-            }
+            cellScales[r][c] = 1.15;
           }
         });
 
-        await Future.delayed(animationDuration);
+        // Check for new unstable cells
+        for (int r = 0; r < rows; r++) {
+          for (int c = 0; c < cols; c++) {
+            if (!processedCells.contains((r, c)) &&
+                orbs[r][c] >= _neighbors(r, c).length) {
+              nextLevel.add((r, c));
+            }
+          }
+        }
 
-        // Reset scales
+        await Future.delayed(distributionDelay);
+
         setState(() {
           for (final (r, c) in affectedCells.union(explosionsThisLevel)) {
             cellScales[r][c] = 1.0;
@@ -215,19 +288,8 @@ class _PlayingPageState extends State<PlayingPage> {
       currentLevel = nextLevel;
     }
 
-    // Final validation
-    bool needsMoreReactions = false;
-    for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < cols; c++) {
-        if (orbs[r][c] >= _neighbors(r, c).length &&
-            !processedCells.contains((r, c))) {
-          needsMoreReactions = true;
-          await _triggerChainReaction(r, c);
-          break;
-        }
-      }
-      if (needsMoreReactions) break;
-    }
+    // Add final validation
+    await validateAndCompleteReactions(processedCells);
   }
 
   void _checkForElimination() {
@@ -281,7 +343,7 @@ class _PlayingPageState extends State<PlayingPage> {
     );
   }
 
-  // Optimize neighbor calculation
+  // Update _neighbors method to handle corners correctly
   List<(int, int)> _neighbors(int r, int c) {
     final key = '$r-$c';
     if (_cachedNeighbors.containsKey(key)) {
@@ -289,36 +351,44 @@ class _PlayingPageState extends State<PlayingPage> {
     }
 
     final neighbors = <(int, int)>[];
-    if (r > 0) neighbors.add((r - 1, c));
-    if (r < rows - 1) neighbors.add((r + 1, c));
-    if (c > 0) neighbors.add((r, c - 1));
-    if (c < cols - 1) neighbors.add((r, c + 1));
+
+    // Check if corner position
+    if (corners.contains((r, c))) {
+      // Corners only have 2 neighbors
+      if (r == 0 && c == 0) {
+        neighbors.addAll([(0, 1), (1, 0)]);
+      } else if (r == 0 && c == cols - 1) {
+        neighbors.addAll([(0, cols - 2), (1, cols - 1)]);
+      } else if (r == rows - 1 && c == 0) {
+        neighbors.addAll([(rows - 2, 0), (rows - 1, 1)]);
+      } else if (r == rows - 1 && c == cols - 1) {
+        neighbors.addAll([(rows - 2, cols - 1), (rows - 1, cols - 2)]);
+      }
+    } else {
+      if (r > 0) neighbors.add((r - 1, c));
+      if (r < rows - 1) neighbors.add((r + 1, c));
+      if (c > 0) neighbors.add((r, c - 1));
+      if (c < cols - 1) neighbors.add((r, c + 1));
+    }
 
     _cachedNeighbors[key] = neighbors;
     return neighbors;
   }
 
   Widget _buildOrbDisplay(int orbCount, Color cellColor, int cellCapacity) {
-    if (widget.representationMode == 0) {
-      return Text(
-        '$orbCount',
-        style: const TextStyle(color: Colors.white, fontSize: 12),
-      );
-    } else {
-      return Stack(
-        children: List.generate(orbCount, (index) {
-          final offset = _getAtomOffset(index, orbCount);
-          return Positioned(
-            left: offset.dx,
-            top: offset.dy,
-            child: AtomWidget(
-              color: cellColor,
-              shouldRotate: orbCount > 1 && orbCount < 4,
-            ),
-          );
-        }),
-      );
-    }
+    return Stack(
+      children: List.generate(orbCount, (index) {
+        final offset = _getAtomOffset(index, orbCount);
+        return Positioned(
+          left: offset.dx,
+          top: offset.dy,
+          child: AtomWidget(
+            color: cellColor,
+            shouldRotate: orbCount > 1 && orbCount < 4,
+          ),
+        );
+      }),
+    );
   }
 
   Offset _getAtomOffset(int index, int total) {

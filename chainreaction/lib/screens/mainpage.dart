@@ -10,12 +10,12 @@ class ChainReactionGame extends StatefulWidget {
 
 class ChainReactionGameState extends State<ChainReactionGame> {
   int numberOfPlayers = 2;
-  int representationMode = 1; // 0 -> Numbers, 1 -> Dots
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.surface,
+      extendBodyBehindAppBar: true,
+      backgroundColor: const Color.fromARGB(227, 58, 46, 67),
       appBar: AppBar(
         centerTitle: true,
         title: const Text('Chain Reaction'),
@@ -45,15 +45,6 @@ class ChainReactionGameState extends State<ChainReactionGame> {
                     });
                   },
                 ),
-                const SizedBox(width: 40),
-                // Dropdown for representation mode
-                AlwaysDownDropdown(
-                  items: const {0: 'Numbers', 1: 'Dots'},
-                  value: representationMode,
-                  onChanged: (int value) {
-                    setState(() => representationMode = value);
-                  },
-                ),
               ],
             )
           ],
@@ -70,7 +61,6 @@ class ChainReactionGameState extends State<ChainReactionGame> {
           MaterialPageRoute(
             builder: (context) => PlayingPage(
               numberOfPlayers: numberOfPlayers,
-              representationMode: representationMode,
             ),
           ),
         );
