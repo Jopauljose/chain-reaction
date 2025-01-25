@@ -10,7 +10,7 @@ class ChainReactionGame extends StatefulWidget {
 
 class ChainReactionGameState extends State<ChainReactionGame> {
   int numberOfPlayers = 2;
-  int representationMode = 0; // 0 -> Numbers, 1 -> Dots
+  int representationMode = 1; // 0 -> Numbers, 1 -> Dots
 
   @override
   Widget build(BuildContext context) {

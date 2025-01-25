@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'package:chainreaction/widgets/atom_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
 
@@ -19,35 +20,43 @@ class PlayingPage extends StatefulWidget {
 class _PlayingPageState extends State<PlayingPage> {
   final AudioPlayer _audioPlayer = AudioPlayer();
 
-  static const int rows = 14; // Increased to 15 rows
-  static const int cols = 7; // Increased to 8 columns
+  // Use const for rows & cols if they never change
+  static const int rows = 14;
+  static const int cols = 7;
 
   late List<List<int>> orbs;
   late List<List<int>> owners;
   late List<bool> isActive;
   late List<int> turnCount;
   late List<List<double>> cellScales; // Add this line after other late vars
+
   int currentPlayer = 0;
+
+  // Add these properties to class
+  late double cellWidth;
+  late double cellHeight;
+  late double gridWidth;
+  late double gridHeight;
 
   // History stack to store previous states
   final List<GameState> history = [];
 
   final List<Color> playerColors = [
-    Colors.red,
-    Colors.green,
     Colors.cyan,
+    Colors.orange,
     Colors.blue,
     Colors.purple,
-    Colors.orange,
+    Colors.red,
+    Colors.green,
   ];
 
   final List<String> colorNames = [
-    'Red',
-    'Green',
     'cyan',
+    'Orange',
     'Blue',
     'Purple',
-    'Orange',
+    'Red',
+    'Green',
   ];
 
   // Add cached neighbors map
@@ -71,6 +80,15 @@ class _PlayingPageState extends State<PlayingPage> {
       rows,
       (r) => List.generate(cols, (c) => 1.0),
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final size = MediaQuery.of(context).size;
+      setState(() {
+        gridWidth = size.width * 0.9;
+        gridHeight = size.height * 0.8;
+        cellWidth = gridWidth / cols;
+        cellHeight = gridHeight / rows;
+      });
+    });
   }
 
   // Function to push current state to history
@@ -195,6 +213,14 @@ class _PlayingPageState extends State<PlayingPage> {
     } finally {
       pendingUpdates.clear();
     }
+    setState(() {
+      cellScales[r][c] = 1.2; // Scale up
+    });
+    await Future.delayed(const Duration(milliseconds: 100));
+    setState(() {
+      cellScales[r][c] = 1.0; // Scale back
+    });
+    await _audioPlayer.play(AssetSource('split.mp3'));
   }
 
   void _checkForElimination() {
@@ -267,30 +293,46 @@ class _PlayingPageState extends State<PlayingPage> {
 
   Widget _buildOrbDisplay(int orbCount, Color cellColor, int cellCapacity) {
     if (widget.representationMode == 0) {
-      // Numeric display
       return Text(
         '$orbCount',
         style: const TextStyle(color: Colors.white, fontSize: 12),
       );
     } else {
-      // Dots display
-      // Limit the number of dots to prevent overflow
-      final displayOrbs =
-          orbCount > cellCapacity ? cellCapacity : orbCount; // Prevent overflow
-      return Wrap(
-        alignment: WrapAlignment.center,
-        runAlignment: WrapAlignment.center,
-        spacing: 1,
-        runSpacing: 1,
-        children: List.generate(
-          displayOrbs,
-          (index) => Icon(
-            Icons.circle,
-            size: 15, // Adjusted size as per your request
-            color: cellColor, // Use owner's color
-          ),
-        ),
+      return Stack(
+        children: List.generate(orbCount, (index) {
+          final offset = _getAtomOffset(index, orbCount);
+          return Positioned(
+            left: offset.dx,
+            top: offset.dy,
+            child: AtomWidget(
+              color: cellColor,
+              shouldRotate: orbCount > 1 && orbCount < 4,
+            ),
+          );
+        }),
       );
+    }
+  }
+
+  Offset _getAtomOffset(int index, int total) {
+    switch (total) {
+      case 1:
+        return const Offset(15, 15);
+      case 2:
+        return index == 0 ? const Offset(10, 15) : const Offset(20, 15);
+      case 3:
+        switch (index) {
+          case 0:
+            return const Offset(15, 8);
+          case 1:
+            return const Offset(8, 22);
+          case 2:
+            return const Offset(22, 22);
+          default:
+            return const Offset(15, 15);
+        }
+      default:
+        return const Offset(15, 15);
     }
   }
 
@@ -326,55 +368,57 @@ class _PlayingPageState extends State<PlayingPage> {
           ),
         ],
       ),
-      body: Center(
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal, // Allow horizontal scrolling
-          child: SingleChildScrollView(
-            scrollDirection: Axis.vertical, // Allow vertical scrolling
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(rows, (r) {
-                return Row(
+      body: Stack(
+        children: [
+          Center(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal, // Allow horizontal scrolling
+              child: SingleChildScrollView(
+                scrollDirection: Axis.vertical, // Allow vertical scrolling
+                child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(cols, (c) {
-                    final owner = owners[r][c];
-                    final orbCount = orbs[r][c];
-                    final cellCapacity = _neighbors(r, c).length;
-                    final cellColor = owner == -1
-                        ? Colors.black
-                        : playerColors[owner % widget.numberOfPlayers];
-                    return AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      margin: const EdgeInsets.all(
-                          1), // Reduced margin for larger grid
-                      width: 50, // Set to accommodate 15 rows and 8 cols
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: cellColor.withAlpha(
-                          (((orbCount + 1) / 5).clamp(0.2, 1) * 255).round(),
-                        ),
-                        border: Border.all(color: borderColor, width: 2),
-                      ),
-                      child: InkWell(
-                        onTap: () => _handleTap(r, c),
-                        child: Center(
-                          child: Transform.scale(
-                            scale: cellScales[r][c],
-                            child: _buildOrbDisplay(
-                              orbCount,
-                              cellColor,
-                              cellCapacity,
+                  children: List.generate(rows, (r) {
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(cols, (c) {
+                        final owner = owners[r][c];
+                        final orbCount = orbs[r][c];
+                        final cellCapacity = _neighbors(r, c).length;
+                        final cellColor = owner == -1
+                            ? Colors.black
+                            : playerColors[owner % widget.numberOfPlayers];
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          margin: const EdgeInsets.all(
+                              1), // Reduced margin for larger grid
+                          width: 50, // Set to accommodate 15 rows and 8 cols
+                          height: 50,
+                          decoration: BoxDecoration(
+                            color: cellColor.withAlpha(2),
+                            border: Border.all(color: borderColor, width: 2),
+                          ),
+                          child: InkWell(
+                            onTap: () => _handleTap(r, c),
+                            child: Center(
+                              child: Transform.scale(
+                                scale: cellScales[r][c],
+                                child: _buildOrbDisplay(
+                                  orbCount,
+                                  cellColor,
+                                  cellCapacity,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
+                        );
+                      }),
                     );
                   }),
-                );
-              }),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
