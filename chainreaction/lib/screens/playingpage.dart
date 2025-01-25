@@ -1,7 +1,6 @@
 import 'dart:collection';
 import 'package:chainreaction/widgets/atom_widget.dart';
 import 'package:flutter/material.dart';
-import 'package:audioplayers/audioplayers.dart';
 
 class PlayingPage extends StatefulWidget {
   final int numberOfPlayers;
@@ -18,11 +17,12 @@ class PlayingPage extends StatefulWidget {
 }
 
 class _PlayingPageState extends State<PlayingPage> {
-  final AudioPlayer _audioPlayer = AudioPlayer();
-
   // Use const for rows & cols if they never change
   static const int rows = 14;
   static const int cols = 7;
+
+  static const animationDuration = Duration(milliseconds: 300);
+  static const explosionDelay = Duration(milliseconds: 100);
 
   late List<List<int>> orbs;
   late List<List<int>> owners;
@@ -64,10 +64,6 @@ class _PlayingPageState extends State<PlayingPage> {
 
   // Add pending updates tracking
   final Map<String, Queue<(int, int)>> pendingUpdates = {};
-
-  Future<void> _playSplitSound() async {
-    await _audioPlayer.play(AssetSource('split.mp3'));
-  }
 
   @override
   void initState() {
@@ -137,90 +133,101 @@ class _PlayingPageState extends State<PlayingPage> {
 
     var currentLevel = Queue<(int, int)>();
     currentLevel.add((r, c));
+    final Set<(int, int)> processedCells = {};
 
-    const animationDuration = Duration(milliseconds: 200);
+    while (currentLevel.isNotEmpty) {
+      final nextLevel = Queue<(int, int)>();
+      final explosionsThisLevel = <(int, int)>{};
+      final affectedCells = <(int, int)>{};
 
-    try {
-      while (currentLevel.isNotEmpty) {
-        final nextLevel = Queue<(int, int)>();
-        final explosionsThisLevel =
-            <(int, int)>{}; // Use Set to prevent duplicates
-
-        // Process current level
-        for (final cell in currentLevel) {
-          final (cr, cc) = cell;
-          if (cr >= 0 && cr < rows && cc >= 0 && cc < cols) {
-            // Check if cell should explode
-            if (orbs[cr][cc] >= _neighbors(cr, cc).length) {
-              explosionsThisLevel.add(cell);
-            }
-          }
+      // Collect explosions for this level
+      for (final cell in currentLevel) {
+        final (cr, cc) = cell;
+        if (!processedCells.contains((cr, cc)) &&
+            cr >= 0 &&
+            cr < rows &&
+            cc >= 0 &&
+            cc < cols &&
+            orbs[cr][cc] >= _neighbors(cr, cc).length) {
+          explosionsThisLevel.add(cell);
+          processedCells.add((cr, cc));
         }
-
-        if (explosionsThisLevel.isNotEmpty) {
-          await _playSplitSound();
-
-          // Process explosions with collision handling
-          for (final (cr, cc) in explosionsThisLevel) {
-            final neighbors = _neighbors(cr, cc);
-            final cap = neighbors.length;
-            final cellOwner = owners[cr][cc];
-
-            // Update exploding cell
-            setState(() {
-              orbs[cr][cc] -= cap;
-              // Reset owner if no orbs left
-              if (orbs[cr][cc] == 0) {
-                owners[cr][cc] = -1;
-              }
-            });
-
-            // Distribute orbs to neighbors
-            for (final (nr, nc) in neighbors) {
-              if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
-                setState(() {
-                  orbs[nr][nc]++;
-                  owners[nr][nc] = cellOwner;
-                });
-
-                // Check if neighbor should be added to next level
-                final key = '$nr-$nc';
-                if (!pendingUpdates.containsKey(key)) {
-                  pendingUpdates[key] = Queue<(int, int)>();
-                }
-                pendingUpdates[key]!.add((nr, nc));
-
-                if (orbs[nr][nc] >= _neighbors(nr, nc).length) {
-                  nextLevel.add((nr, nc));
-                }
-              }
-            }
-          }
-
-          await Future.delayed(animationDuration);
-        }
-
-        // Clear processed updates
-        for (var cell in explosionsThisLevel) {
-          final (r, c) = cell;
-          pendingUpdates.remove('$r-$c');
-        }
-
-        currentLevel = nextLevel;
       }
-    } catch (e) {
-      debugPrint('Chain reaction error: $e');
-    } finally {
-      pendingUpdates.clear();
+
+      if (explosionsThisLevel.isNotEmpty) {
+        // Scale up explosions
+        setState(() {
+          for (final (cr, cc) in explosionsThisLevel) {
+            cellScales[cr][cc] = 1.4;
+          }
+        });
+        await Future.delayed(explosionDelay);
+
+        // Process explosions and collect updates
+        final updates = <(int, int, int, int)>[];
+
+        for (final (cr, cc) in explosionsThisLevel) {
+          final neighbors = _neighbors(cr, cc);
+          final cap = neighbors.length;
+          final cellOwner = owners[cr][cc];
+
+          // Update exploding cell
+          setState(() {
+            cellScales[cr][cc] = 0.8;
+            orbs[cr][cc] -= cap;
+            if (orbs[cr][cc] == 0) owners[cr][cc] = -1;
+          });
+
+          // Collect neighbor updates
+          for (final (nr, nc) in neighbors) {
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
+              updates.add((nr, nc, 1, cellOwner));
+              affectedCells.add((nr, nc));
+            }
+          }
+        }
+
+        // Apply updates and check for new reactions
+        setState(() {
+          for (final (r, c, count, owner) in updates) {
+            orbs[r][c] += count;
+            owners[r][c] = owner;
+            cellScales[r][c] = 1.2;
+
+            // Check if this cell needs to react in next level
+            if (orbs[r][c] >= _neighbors(r, c).length &&
+                !processedCells.contains((r, c))) {
+              nextLevel.add((r, c));
+            }
+          }
+        });
+
+        await Future.delayed(animationDuration);
+
+        // Reset scales
+        setState(() {
+          for (final (r, c) in affectedCells.union(explosionsThisLevel)) {
+            cellScales[r][c] = 1.0;
+          }
+        });
+      }
+
+      currentLevel = nextLevel;
     }
-    setState(() {
-      cellScales[r][c] = 1.2; // Scale up
-    });
-    await Future.delayed(const Duration(milliseconds: 100));
-    setState(() {
-      cellScales[r][c] = 1.0; // Scale back
-    });
-    await _audioPlayer.play(AssetSource('split.mp3'));
+
+    // Final validation
+    bool needsMoreReactions = false;
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        if (orbs[r][c] >= _neighbors(r, c).length &&
+            !processedCells.contains((r, c))) {
+          needsMoreReactions = true;
+          await _triggerChainReaction(r, c);
+          break;
+        }
+      }
+      if (needsMoreReactions) break;
+    }
   }
 
   void _checkForElimination() {
@@ -388,7 +395,8 @@ class _PlayingPageState extends State<PlayingPage> {
                             ? Colors.black
                             : playerColors[owner % widget.numberOfPlayers];
                         return AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
+                          duration: animationDuration,
+                          curve: Curves.easeInOutCubic,
                           margin: const EdgeInsets.all(
                               1), // Reduced margin for larger grid
                           width: 50, // Set to accommodate 15 rows and 8 cols
@@ -400,7 +408,9 @@ class _PlayingPageState extends State<PlayingPage> {
                           child: InkWell(
                             onTap: () => _handleTap(r, c),
                             child: Center(
-                              child: Transform.scale(
+                              child: AnimatedScale(
+                                duration: animationDuration,
+                                curve: Curves.easeOutBack,
                                 scale: cellScales[r][c],
                                 child: _buildOrbDisplay(
                                   orbCount,

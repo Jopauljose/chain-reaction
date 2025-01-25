@@ -56,8 +56,8 @@ class _AtomWidgetState extends State<AtomWidget>
   Widget _buildAtom() {
     return RepaintBoundary(
       child: Container(
-        width: 15,
-        height: 15,
+        width: 19,
+        height: 19,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: RadialGradient(
