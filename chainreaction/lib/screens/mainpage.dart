@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:chainreaction/screens/playingpage.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ChainReactionGame extends StatefulWidget {
   const ChainReactionGame({super.key});
@@ -10,6 +13,83 @@ class ChainReactionGame extends StatefulWidget {
 
 class ChainReactionGameState extends State<ChainReactionGame> {
   int numberOfPlayers = 2;
+  bool hasSavedGame = false;
+
+  // Add constant for width
+  static const double buttonWidth = 160.0;
+  static const double buttonHeight = 50.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkSavedGame();
+  }
+
+  Future<void> _checkSavedGame() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedGame = prefs.getString('savedGame');
+    setState(() {
+      hasSavedGame = savedGame != null;
+    });
+  }
+
+  Future<void> _loadGame() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedGameStr = prefs.getString('savedGame');
+
+      if (!mounted) return;
+
+      if (savedGameStr != null) {
+        final gameState = GameStatesave.fromJson(jsonDecode(savedGameStr));
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PlayingPage(
+              numberOfPlayers: gameState.numberOfPlayers,
+              savedGame: gameState,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading game: $e')),
+      );
+    }
+  }
+
+  Widget _buildGameButton(BuildContext context, {bool isNewGame = true}) {
+    return SizedBox(
+      width: buttonWidth,
+      height: buttonHeight,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(6),
+          ),
+        ),
+        onPressed: isNewGame
+            ? () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => PlayingPage(
+                      numberOfPlayers: numberOfPlayers,
+                    ),
+                  ),
+                );
+              }
+            : _loadGame,
+        child: Text(
+          isNewGame ? 'New Game' : 'Continue Game',
+          style: const TextStyle(fontSize: 16),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,14 +104,19 @@ class ChainReactionGameState extends State<ChainReactionGame> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            // Simple dropdown to control numberOfPlayers
-
-            startbutton(context),
+            _buildGameButton(context), // New Game button
+            if (hasSavedGame) ...[
+              const SizedBox(height: 16),
+              _buildGameButton(context,
+                  isNewGame: false), // Continue Game button
+            ],
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 AlwaysDownDropdown(
+                  width: buttonWidth,
+                  height: buttonHeight,
                   items: const {
                     2: '2 Players',
                     3: '3 Players',
@@ -47,43 +132,6 @@ class ChainReactionGameState extends State<ChainReactionGame> {
                 ),
               ],
             )
-          ],
-        ),
-      ),
-    );
-  }
-
-  GestureDetector startbutton(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => PlayingPage(
-              numberOfPlayers: numberOfPlayers,
-            ),
-          ),
-        );
-      },
-      child: Container(
-        width: 160,
-        height: 60,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primary,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              'Start Game',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-              ),
-            ),
-            Icon(Icons.play_arrow, color: Colors.white),
           ],
         ),
       ),

@@ -1,13 +1,17 @@
 import 'dart:collection';
+import 'dart:convert';
 import 'package:chainreaction/widgets/atom_widget.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class PlayingPage extends StatefulWidget {
   final int numberOfPlayers;
+  final GameStatesave? savedGame;
 
   const PlayingPage({
     super.key,
     required this.numberOfPlayers,
+    this.savedGame,
   });
 
   @override
@@ -15,6 +19,36 @@ class PlayingPage extends StatefulWidget {
 }
 
 class _PlayingPageState extends State<PlayingPage> {
+  Future<void> _saveGame() async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final gameState = GameStatesave(
+        orbs: orbs,
+        owners: owners,
+        isActive: isActive,
+        turnCount: turnCount,
+        currentPlayer: currentPlayer,
+        numberOfPlayers: widget.numberOfPlayers,
+      );
+
+      final jsonStr = jsonEncode(gameState.toJson());
+      await prefs.setString('savedGame', jsonStr);
+
+      if (mounted) {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(content: Text('Game saved successfully!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(content: Text('Error saving game: $e')),
+        );
+      }
+    }
+  }
+
   static const int rows = 14;
   static const int cols = 7;
 
@@ -96,17 +130,36 @@ class _PlayingPageState extends State<PlayingPage> {
     (rows - 1, cols - 1)
   };
 
+  // Add at class level
+  bool _reactionsInProgress = false;
+
+  // Add these variables to track player state
+  Set<int> eliminatedPlayers = {};
+  Set<int> playersWhoTookTurns = {};
+
   @override
   void initState() {
     super.initState();
-    orbs = List.generate(rows, (_) => List.generate(cols, (_) => 0));
-    owners = List.generate(rows, (_) => List.generate(cols, (_) => -1));
-    isActive = List.filled(widget.numberOfPlayers, true);
-    turnCount = List.filled(widget.numberOfPlayers, 0);
+    if (widget.savedGame != null) {
+      // Load saved game state
+      orbs = widget.savedGame!.orbs;
+      owners = widget.savedGame!.owners;
+      isActive = widget.savedGame!.isActive;
+      turnCount = widget.savedGame!.turnCount;
+      currentPlayer = widget.savedGame!.currentPlayer;
+    } else {
+      // Initialize new game
+      orbs = List.generate(rows, (_) => List.generate(cols, (_) => 0));
+      owners = List.generate(rows, (_) => List.generate(cols, (_) => -1));
+      isActive = List.filled(widget.numberOfPlayers, true);
+      turnCount = List.filled(widget.numberOfPlayers, 0);
+    }
+
     cellScales = List.generate(
       rows,
       (r) => List.generate(cols, (c) => 1.0),
     );
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final size = MediaQuery.of(context).size;
       setState(() {
@@ -158,45 +211,75 @@ class _PlayingPageState extends State<PlayingPage> {
     }
   }
 
+  // Add new method to check single color
+  bool hasSingleColorRemaining() {
+    int activeColor = -1;
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        if (orbs[r][c] > 0) {
+          if (activeColor == -1) {
+            activeColor = owners[r][c];
+          } else if (owners[r][c] != activeColor) {
+            return false;
+          }
+        }
+      }
+    }
+    return activeColor != -1;
+  }
+
+  // Add method to get winner
+  int getWinner() {
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        if (orbs[r][c] > 0) {
+          return owners[r][c];
+        }
+      }
+    }
+    return -1;
+  }
+
   // Update validation in _handleTap
   void _handleTap(int r, int c) async {
-    if (!mounted) return;
-
-    // Add corner capacity check
-    final isCorner = corners.contains((r, c));
-    final neighborCount = _neighbors(r, c).length;
-
-    if (orbs[r][c] > (isCorner ? 1 : neighborCount)) {
-      // Fix illegal state
-      setState(() {
-        orbs[r][c] = isCorner ? 1 : neighborCount;
-      });
-    }
-
+    if (!mounted || _reactionsInProgress) return;
     if (!isActive[currentPlayer]) return;
+
     if (orbs[r][c] == 0 || owners[r][c] == currentPlayer) {
-      // Push current state to history before making changes
+      _reactionsInProgress = true;
       _pushToHistory();
 
       setState(() {
         orbs[r][c]++;
         owners[r][c] = currentPlayer;
         turnCount[currentPlayer]++;
+        playersWhoTookTurns.add(currentPlayer); // Track who took turns
       });
-      // Trigger chain reaction asynchronously
-      await _triggerChainReaction(r, c);
-      await completeAllReactions(); // Add this line
 
-      // Only check elimination if every player has had at least one turn
       final allPlayersHadOneTurn = turnCount.every((count) => count >= 1);
+
+      await _triggerChainReaction(r, c);
+      await completeAllReactions();
+
+      // Check for eliminated players after reactions complete
       if (allPlayersHadOneTurn) {
-        _checkForElimination();
+        checkPlayerElimination();
+      }
+
+      // Check winner
+      if (allPlayersHadOneTurn && hasSingleColorRemaining()) {
+        _showWinDialog(getWinner());
+        return;
       }
 
       if (!hasUnstableCells()) {
-        // Only change turn if no unstable cells
-        _nextPlayer();
+        do {
+          currentPlayer = (currentPlayer + 1) % widget.numberOfPlayers;
+        } while (eliminatedPlayers.contains(currentPlayer));
+        setState(() {});
       }
+
+      _reactionsInProgress = false;
     }
   }
 
@@ -290,35 +373,6 @@ class _PlayingPageState extends State<PlayingPage> {
 
     // Add final validation
     await validateAndCompleteReactions(processedCells);
-  }
-
-  void _checkForElimination() {
-    final counts = List.filled(widget.numberOfPlayers, 0);
-    for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < cols; c++) {
-        final owner = owners[r][c];
-        if (owner >= 0) {
-          counts[owner]++;
-        }
-      }
-    }
-    for (int p = 0; p < widget.numberOfPlayers; p++) {
-      if (counts[p] == 0) {
-        isActive[p] = false;
-      }
-    }
-    final stillIn = isActive.where((active) => active).length;
-    if (stillIn == 1) {
-      final winner = isActive.indexWhere((p) => p);
-      _showWinDialog(winner);
-    }
-  }
-
-  void _nextPlayer() {
-    do {
-      currentPlayer = (currentPlayer + 1) % widget.numberOfPlayers;
-    } while (!isActive[currentPlayer]);
-    setState(() {});
   }
 
   /// Updated _showWinDialog method
@@ -427,6 +481,60 @@ class _PlayingPageState extends State<PlayingPage> {
     }
   }
 
+  // Add this method to check if a player's color exists in grid
+  bool isPlayerColorInGrid(int playerIndex) {
+    for (var row = 0; row < orbs.length; row++) {
+      for (var col = 0; col < orbs[row].length; col++) {
+        if (orbs[row][col] > 0 && owners[row][col] == playerIndex) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Add this method to check for player elimination
+  void checkPlayerElimination() {
+    if (playersWhoTookTurns.length < widget.numberOfPlayers) {
+      return;
+    }
+
+    for (int i = 0; i < widget.numberOfPlayers; i++) {
+      if (!eliminatedPlayers.contains(i) && !isPlayerColorInGrid(i)) {
+        setState(() {
+          eliminatedPlayers.add(i);
+          isActive[i] = false; // Mark player as inactive
+        });
+
+        // Show elimination message
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${colorNames[i]} has been eliminated!'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  // Modify your turn handling method to track turns and check elimination
+  void handlePlayerTurn(int row, int col) {
+    // Add current player to the set of players who took turns
+    playersWhoTookTurns.add(currentPlayer);
+
+    // ... existing turn logic ...
+
+    // After move is complete, check for elimination
+    checkPlayerElimination();
+
+    // Update current player, skipping eliminated players
+    do {
+      currentPlayer = (currentPlayer + 1) % widget.numberOfPlayers;
+    } while (eliminatedPlayers.contains(currentPlayer));
+  }
+
   @override
   Widget build(BuildContext context) {
     final borderColor = playerColors[currentPlayer % widget.numberOfPlayers];
@@ -438,6 +546,11 @@ class _PlayingPageState extends State<PlayingPage> {
         ),
         backgroundColor: borderColor, // Indicate current player's turn
         actions: [
+          IconButton(
+            icon: const Icon(Icons.save),
+            onPressed: _saveGame,
+            tooltip: 'Save game',
+          ),
           IconButton(
             icon: const Icon(Icons.undo),
             tooltip: 'Undo',
@@ -472,7 +585,7 @@ class _PlayingPageState extends State<PlayingPage> {
                           width: 50, // Set to accommodate 15 rows and 8 cols
                           height: 50,
                           decoration: BoxDecoration(
-                            color: cellColor.withAlpha(2),
+                            color: Colors.black.withAlpha(200),
                             border: Border.all(color: borderColor, width: 2),
                           ),
                           child: InkWell(
@@ -526,4 +639,46 @@ class GameState {
     required this.turnCount,
     required this.currentPlayer,
   });
+}
+
+class GameStatesave {
+  final List<List<int>> orbs;
+  final List<List<int>> owners;
+  final List<bool> isActive;
+  final List<int> turnCount;
+  final int currentPlayer;
+  final int numberOfPlayers;
+
+  GameStatesave({
+    required this.orbs,
+    required this.owners,
+    required this.isActive,
+    required this.turnCount,
+    required this.currentPlayer,
+    required this.numberOfPlayers,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'orbs': orbs.map((row) => row.toList()).toList(),
+        'owners': owners.map((row) => row.toList()).toList(),
+        'isActive': isActive.toList(),
+        'turnCount': turnCount.toList(),
+        'currentPlayer': currentPlayer,
+        'numberOfPlayers': numberOfPlayers,
+      };
+
+  factory GameStatesave.fromJson(Map<String, dynamic> json) {
+    return GameStatesave(
+      orbs: (json['orbs'] as List)
+          .map((row) => List<int>.from(row as List))
+          .toList(),
+      owners: (json['owners'] as List)
+          .map((row) => List<int>.from(row as List))
+          .toList(),
+      isActive: List<bool>.from(json['isActive'] as List),
+      turnCount: List<int>.from(json['turnCount'] as List),
+      currentPlayer: json['currentPlayer'] as int,
+      numberOfPlayers: json['numberOfPlayers'] as int,
+    );
+  }
 }
