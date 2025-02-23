@@ -1,0 +1,24 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+class GameService {
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  Future<void> createGame(String gameId) async {
+    await _firestore.collection('games').doc(gameId).set({
+      'state': 'waiting',
+      // other initial game state
+    });
+  }
+
+  Stream<DocumentSnapshot> getGameStream(String gameId) {
+    return _firestore.collection('games').doc(gameId).snapshots();
+  }
+
+  Future<void> makeMove(String gameId, String playerId, Move move) async {
+    // Update game state with the new move
+    await _firestore.collection('games').doc(gameId).update({
+      'moves': FieldValue.arrayUnion([move.toJson()]),
+      // Update other game state as necessary
+    });
+  }
+}

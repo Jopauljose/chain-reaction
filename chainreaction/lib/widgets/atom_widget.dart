@@ -1,82 +1,79 @@
 import 'package:flutter/material.dart';
 import 'dart:math';
 
-class AtomWidget extends StatefulWidget {
+class AtomWidget extends StatelessWidget {
+  final Color color;
+  final bool shouldRotate;
+  final int index;
+  final int total;
+  final double animationValue;
+
   const AtomWidget({
     super.key,
     required this.color,
-    this.shouldRotate = false,
-    this.orbitRadius = 8.0,
-    this.initialAngle = 0.0,
+    required this.shouldRotate,
+    required this.index,
+    required this.total,
+    required this.animationValue,
   });
 
-  final Color color;
-  final bool shouldRotate;
-  final double orbitRadius;
-  final double initialAngle;
-
-  @override
-  State<AtomWidget> createState() => _AtomWidgetState();
-}
-
-class _AtomWidgetState extends State<AtomWidget>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(seconds: 2),
-      vsync: this,
-    )..repeat();
+  // Helper method: determine orb size based on total count
+  double _getOrbSize() {
+    switch (total) {
+      case 1:
+      case 2:
+      case 3:
+        return 19.0;
+      case 4:
+        return 10.0;
+      default:
+        return 13.0;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.shouldRotate) {
-      return _buildAtom();
+    final orbSize = _getOrbSize();
+
+    if (!shouldRotate) {
+      return Center(child: _buildAtom(orbSize));
     }
 
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (_, __) {
-        final angle = _controller.value * 2 * pi + widget.initialAngle;
-        return Transform.translate(
-          offset: Offset(
-            widget.orbitRadius * cos(angle),
-            widget.orbitRadius * sin(angle),
-          ),
-          child: _buildAtom(),
-        );
-      },
-    );
-  }
+    final orbitalPhaseOffset = (2 * pi * index) / total;
+    final orbitalAngle = animationValue + orbitalPhaseOffset;
+    final orbitalRadius =
+        total > 1 ? (0.95 * orbSize) / (2 * sin(pi / total)) : 0.0;
 
-  Widget _buildAtom() {
-    return RepaintBoundary(
-      child: Container(
-        width: 19,
-        height: 19,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [
-              widget.color,
-              widget.color.withAlpha(179), // ~0.7 * 255
-              widget.color.withAlpha(77), // ~0.3 * 255
-            ],
-            stops: const [0.0, 0.5, 1.0],
-            center: const Alignment(-0.3, -0.3),
-          ),
-        ),
+    double dx = cos(orbitalAngle) * orbitalRadius;
+    double dy = sin(orbitalAngle) * orbitalRadius;
+
+    return Transform.translate(
+      offset: Offset(dx, dy),
+      child: Transform.rotate(
+        angle: animationValue,
+        child: _buildAtom(orbSize),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
+  Widget _buildAtom(double orbSize) {
+    return RepaintBoundary(
+      child: Container(
+        width: orbSize,
+        height: orbSize,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            center: Alignment.center,
+            colors: [
+              color,
+              color.withAlpha(179), // ~70% opacity
+              color.withAlpha(77), // ~30% opacity
+            ],
+            stops: const [0.0, 0.5, 1.0],
+          ),
+        ),
+      ),
+    );
   }
 }

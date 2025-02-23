@@ -1,5 +1,7 @@
+import 'dart:math';
 import 'dart:collection';
 import 'dart:convert';
+
 import 'package:chainreaction/widgets/atom_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,7 +20,13 @@ class PlayingPage extends StatefulWidget {
   State<PlayingPage> createState() => _PlayingPageState();
 }
 
-class _PlayingPageState extends State<PlayingPage> {
+class _PlayingPageState extends State<PlayingPage>
+    with SingleTickerProviderStateMixin {
+  // Global animation variables
+  bool _gameover = false;
+  late AnimationController _globalAnimationController;
+  late Animation<double> _globalAnimation;
+
   Future<void> _saveGame() async {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
@@ -51,7 +59,6 @@ class _PlayingPageState extends State<PlayingPage> {
 
   static const int rows = 14;
   static const int cols = 7;
-
   static const animationDuration = Duration(milliseconds: 300);
   static const explosionDelay = Duration(milliseconds: 150);
   static const distributionDelay = Duration(milliseconds: 100);
@@ -85,7 +92,7 @@ class _PlayingPageState extends State<PlayingPage> {
   late List<List<int>> owners;
   late List<bool> isActive;
   late List<int> turnCount;
-  late List<List<double>> cellScales; // Add this line after other late vars
+  late List<List<double>> cellScales;
 
   int currentPlayer = 0;
 
@@ -140,6 +147,7 @@ class _PlayingPageState extends State<PlayingPage> {
   @override
   void initState() {
     super.initState();
+    _gameover = false;
     if (widget.savedGame != null) {
       // Load saved game state
       orbs = widget.savedGame!.orbs;
@@ -169,6 +177,14 @@ class _PlayingPageState extends State<PlayingPage> {
         cellHeight = gridHeight / rows;
       });
     });
+
+    // Initialize global animation controller
+    _globalAnimationController = AnimationController(
+      duration: const Duration(seconds: 3),
+      vsync: this,
+    )..repeat();
+    _globalAnimation =
+        Tween(begin: 0.0, end: 2 * pi).animate(_globalAnimationController);
   }
 
   // Function to push current state to history
@@ -242,7 +258,7 @@ class _PlayingPageState extends State<PlayingPage> {
 
   // Update validation in _handleTap
   void _handleTap(int r, int c) async {
-    if (!mounted || _reactionsInProgress) return;
+    if (!mounted || _reactionsInProgress || _gameover) return;
     if (!isActive[currentPlayer]) return;
 
     if (orbs[r][c] == 0 || owners[r][c] == currentPlayer) {
@@ -272,7 +288,7 @@ class _PlayingPageState extends State<PlayingPage> {
         return;
       }
 
-      if (!hasUnstableCells()) {
+      if (!hasUnstableCells() && !_gameover) {
         do {
           currentPlayer = (currentPlayer + 1) % widget.numberOfPlayers;
         } while (eliminatedPlayers.contains(currentPlayer));
@@ -285,13 +301,13 @@ class _PlayingPageState extends State<PlayingPage> {
 
   /// Optimized chain reaction
   Future<void> _triggerChainReaction(int r, int c) async {
-    if (!mounted) return;
+    if (!mounted || _gameover) return;
 
     var currentLevel = Queue<(int, int)>();
     currentLevel.add((r, c));
     final Set<(int, int)> processedCells = {};
 
-    while (currentLevel.isNotEmpty) {
+    while (currentLevel.isNotEmpty && !_gameover) {
       final nextLevel = Queue<(int, int)>();
       final explosionsThisLevel = <(int, int)>{};
       final affectedCells = <(int, int)>{};
@@ -372,27 +388,74 @@ class _PlayingPageState extends State<PlayingPage> {
     }
 
     // Add final validation
-    await validateAndCompleteReactions(processedCells);
+    if (!_gameover) {
+      await validateAndCompleteReactions(processedCells);
+    }
   }
 
   /// Updated _showWinDialog method
   Future<void> _showWinDialog(int winner) async {
     final winnerColorName = colorNames[winner];
+    if (!mounted) return;
+
     await showDialog(
       context: context,
-      barrierDismissible: false, // Prevent dismissal by tapping outside
-      builder: (_) => AlertDialog(
-        title: const Text('Game Over'),
-        content: Text('$winnerColorName wins!'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context); // Close the dialog
-              Navigator.pop(context); // Navigate back to main page
-            },
-            child: const Text('OK'),
+      barrierDismissible: false,
+      builder: (dialogContext) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          title: const Text('Game Over'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('$winnerColorName wins!'),
+              const SizedBox(height: 16),
+              Text('Player took ${turnCount[winner]} turns'),
+            ],
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () {
+                // First pop dialog
+                Navigator.pop(dialogContext);
+                Navigator.pop(context);
+
+                // Then reset game state
+                if (mounted) {
+                  setState(() {
+                    _gameover = false;
+                    _reactionsInProgress = false;
+                    orbs = List.generate(
+                        rows, (_) => List.generate(cols, (_) => 0));
+                    owners = List.generate(
+                        rows, (_) => List.generate(cols, (_) => -1));
+                    isActive = List.filled(widget.numberOfPlayers, true);
+                    turnCount = List.filled(widget.numberOfPlayers, 0);
+                    currentPlayer = 0;
+                    eliminatedPlayers.clear();
+                    playersWhoTookTurns.clear();
+                    history.clear();
+                    cellScales = List.generate(
+                        rows, (r) => List.generate(cols, (c) => 1.0));
+                    _cachedNeighbors.clear();
+                  });
+                }
+              },
+              child: const Text('Play Again'),
+            ),
+            TextButton(
+              onPressed: () {
+                // First pop dialog
+                Navigator.pop(dialogContext);
+                // Then navigate back to main menu
+                if (mounted) {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                }
+              },
+              child: const Text('Main Menu'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -429,42 +492,32 @@ class _PlayingPageState extends State<PlayingPage> {
     return neighbors;
   }
 
+  // Updated _buildOrbDisplay method to use global animation value
   Widget _buildOrbDisplay(int orbCount, Color cellColor, int cellCapacity) {
-    return Stack(
-      children: List.generate(orbCount, (index) {
-        final offset = _getAtomOffset(index, orbCount);
-        return Positioned(
-          left: offset.dx,
-          top: offset.dy,
-          child: AtomWidget(
-            color: cellColor,
-            shouldRotate: orbCount > 1 && orbCount < 4,
+    return AnimatedBuilder(
+      animation: _globalAnimation,
+      builder: (context, child) {
+        return SizedBox(
+          width: 50,
+          height: 50,
+          child: Center(
+            child: Stack(
+              alignment: Alignment.center,
+              children: List.generate(orbCount, (index) {
+                return AtomWidget(
+                  color: cellColor,
+                  shouldRotate: true,
+                  index: index,
+                  total: orbCount,
+                  animationValue:
+                      _globalAnimation.value, // Pass the global value
+                );
+              }),
+            ),
           ),
         );
-      }),
+      },
     );
-  }
-
-  Offset _getAtomOffset(int index, int total) {
-    switch (total) {
-      case 1:
-        return const Offset(15, 15);
-      case 2:
-        return index == 0 ? const Offset(10, 15) : const Offset(20, 15);
-      case 3:
-        switch (index) {
-          case 0:
-            return const Offset(15, 8);
-          case 1:
-            return const Offset(8, 22);
-          case 2:
-            return const Offset(22, 22);
-          default:
-            return const Offset(15, 15);
-        }
-      default:
-        return const Offset(15, 15);
-    }
   }
 
   /// Undo the last action
@@ -506,7 +559,6 @@ class _PlayingPageState extends State<PlayingPage> {
           isActive[i] = false; // Mark player as inactive
         });
 
-        // Show elimination message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -515,6 +567,18 @@ class _PlayingPageState extends State<PlayingPage> {
             ),
           );
         }
+      }
+    }
+
+    // Check if only one player remains
+    final activePlayers = isActive.where((active) => active).toList();
+    if (activePlayers.length == 1) {
+      final winner = isActive.indexOf(true);
+      if (winner != -1 && !_gameover) {
+        setState(() {
+          _gameover = true;
+        });
+        _showWinDialog(winner);
       }
     }
   }
@@ -580,9 +644,8 @@ class _PlayingPageState extends State<PlayingPage> {
                         return AnimatedContainer(
                           duration: animationDuration,
                           curve: Curves.easeInOutCubic,
-                          margin: const EdgeInsets.all(
-                              1), // Reduced margin for larger grid
-                          width: 50, // Set to accommodate 15 rows and 8 cols
+                          margin: const EdgeInsets.all(1),
+                          width: 50,
                           height: 50,
                           decoration: BoxDecoration(
                             color: Colors.black.withAlpha(200),
@@ -618,6 +681,7 @@ class _PlayingPageState extends State<PlayingPage> {
 
   @override
   void dispose() {
+    _globalAnimationController.dispose();
     _cachedNeighbors.clear();
     pendingUpdates.clear();
     super.dispose();

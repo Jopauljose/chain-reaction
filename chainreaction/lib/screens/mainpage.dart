@@ -11,18 +11,32 @@ class ChainReactionGame extends StatefulWidget {
   ChainReactionGameState createState() => ChainReactionGameState();
 }
 
-class ChainReactionGameState extends State<ChainReactionGame> {
+class ChainReactionGameState extends State<ChainReactionGame>
+    with WidgetsBindingObserver {
   int numberOfPlayers = 2;
   bool hasSavedGame = false;
 
-  // Add constant for width
   static const double buttonWidth = 160.0;
   static const double buttonHeight = 50.0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkSavedGame();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkSavedGame();
+    }
   }
 
   Future<void> _checkSavedGame() async {
@@ -37,12 +51,11 @@ class ChainReactionGameState extends State<ChainReactionGame> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedGameStr = prefs.getString('savedGame');
-
       if (!mounted) return;
 
       if (savedGameStr != null) {
         final gameState = GameStatesave.fromJson(jsonDecode(savedGameStr));
-        Navigator.push(
+        await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => PlayingPage(
@@ -80,9 +93,11 @@ class ChainReactionGameState extends State<ChainReactionGame> {
                       numberOfPlayers: numberOfPlayers,
                     ),
                   ),
-                );
+                ).then((_) => _checkSavedGame());
               }
-            : _loadGame,
+            : () {
+                _loadGame().then((_) => _checkSavedGame());
+              },
         child: Text(
           isNewGame ? 'New Game' : 'Continue Game',
           style: const TextStyle(fontSize: 16),
